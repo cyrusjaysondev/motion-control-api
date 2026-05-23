@@ -288,6 +288,20 @@ def build_wan_motion_workflow(
             "model": ["160", 0],
             "images": ["153", 0],
         }},
+        # PoseAndFaceDetection emits POSEDATA at slot 0, not IMAGE. The
+        # WanVideoAnimateEmbeds.pose_images input wants drawn skeleton
+        # frames, so route the POSEDATA through DrawViTPose first. The
+        # stick widths at -1 mean "auto-scale" based on canvas size,
+        # which is what the AIGCTV reference graph uses.
+        "162": {"class_type": "DrawViTPose", "inputs": {
+            "width": width,
+            "height": height,
+            "retarget_padding": 16,
+            "body_stick_width": -1,
+            "hand_stick_width": -1,
+            "draw_head": True,
+            "pose_data": ["161", 0],
+        }},
 
         # ─── 8. WanVideoAnimateEmbeds (combine all conditionings) ──
         # The Wan-wrapper analog of Comfy's WanAnimateToVideo. Takes
@@ -308,8 +322,8 @@ def build_wan_motion_workflow(
             "vae": ["110", 0],
             "clip_embeds": ["142", 0],
             "ref_images": ["141", 0],
-            "pose_images": ["161", 0],
-            "face_images": ["161", 1],
+            "pose_images": ["162", 0],   # DrawViTPose IMAGE output
+            "face_images": ["161", 1],   # PoseAndFaceDetection face crops
         }},
 
         # ─── 9. Context options (sliding-window sampling) ──────────
