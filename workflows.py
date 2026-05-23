@@ -67,11 +67,13 @@ _WAN_STEPS = 4            # Lightning LoRA lets us run in 4 steps
 _WAN_CFG = 1.0            # distilled model — guidance is baked in
 _WAN_SHIFT = 5.0          # noise schedule shift; 5.0 fits Lightning
 _WAN_SCHEDULER = "dpm++_sde"
-_WAN_BLOCKS_TO_SWAP = 4   # offloaded transformer blocks. 2 fits the
-                          # 2-LoRA stack, 4 fits the 5-LoRA stack with
-                          # the resized Pusa LoRA (~1 GB vs 4.9 GB
-                          # original). 10 worked at 22 GB but slowed
-                          # sampling 3x due to repeated block reloads.
+_WAN_BLOCKS_TO_SWAP = 8   # offloaded transformer blocks (of 40
+                          # total). 2 fits the 2-LoRA stack on 24 GB,
+                          # but the 5-LoRA stack OOM'd at both 2 and 4
+                          # — context windows + 1133 LoRA patches
+                          # plus activations exceed the 4090's headroom.
+                          # 8 leaves ~3 GB free; 10 was overly aggressive
+                          # and tripled step latency from re-staging IO.
 
 # Context windowing — lets the sampler handle clips longer than the
 # single chunk size by sliding a window through the latent. With
