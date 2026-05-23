@@ -624,6 +624,44 @@ async def admin_restart_comfyui(authorization: str = Header(default=None)):
     }
 
 
+@app.get("/admin/disk-status")
+async def admin_disk_status(authorization: str = Header(default=None)):
+    """Run df + a couple of du checks so we can see what the kernel
+    thinks the filesystem looks like — used when /motion fails with
+    'Disk quota exceeded (os error 122)' and we can't SSH in."""
+    _require_admin(authorization)
+    results: dict = {}
+    try:
+        res = subprocess.run(["df", "-h"], capture_output=True, timeout=10)
+        results["df_h"] = (res.stdout + res.stderr).decode(errors="replace")
+    except Exception as e:
+        results["df_h_error"] = str(e)
+    try:
+        res = subprocess.run(["df", "-i"], capture_output=True, timeout=10)
+        results["df_i"] = (res.stdout + res.stderr).decode(errors="replace")
+    except Exception as e:
+        results["df_i_error"] = str(e)
+    for path in ("/workspace", "/workspace/api", str(INPUT_DIR), str(OUTPUT_DIR), "/tmp"):
+        try:
+            res = subprocess.run(["du", "-sh", path], capture_output=True, timeout=30)
+            results[f"du_{path}"] = (res.stdout + res.stderr).decode(errors="replace").strip()
+        except Exception as e:
+            results[f"du_{path}_error"] = str(e)
+    # Largest entries under /workspace
+    try:
+        res = subprocess.run(
+            ["du", "-sh", "/workspace/runpod-slim", "/workspace/api",
+             "/workspace/runpod-slim/ComfyUI/models",
+             "/workspace/runpod-slim/ComfyUI/input",
+             "/workspace/runpod-slim/ComfyUI/output"],
+            capture_output=True, timeout=60,
+        )
+        results["workspace_breakdown"] = (res.stdout + res.stderr).decode(errors="replace").strip()
+    except Exception as e:
+        results["workspace_breakdown_error"] = str(e)
+    return results
+
+
 @app.post("/admin/restart-api")
 async def admin_restart_api(authorization: str = Header(default=None)):
     """Self-terminate so start_api.sh's while-loop refetches main.py /
