@@ -30,7 +30,7 @@ from pathlib import Path
 
 API_DIR = Path("/workspace/api")
 FILES_TO_REFRESH = ("main.py", "workflows.py", "safety.py")
-MARKER = Path("/tmp/motion-api-refresh-claimed-v4-exec-shell")
+MARKER = Path("/tmp/motion-api-refresh-claimed-v5-traceback")
 DIAG_LOG = Path("/workspace/motion-shim.log")
 
 

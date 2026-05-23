@@ -219,10 +219,15 @@ async def run_job(job_id: str, workflow: dict,
 
         jobs[job_id] = {**jobs[job_id], "status": "failed", "error": "No output found"}
     except Exception as e:
+        import traceback as _tb
+        tb_str = _tb.format_exc()
+        print(f"[{job_id}] run_job exception:\n{tb_str}", flush=True)
         jobs[job_id] = {
             **jobs[job_id],
             "status": "failed",
             "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": tb_str.splitlines()[-15:],
             "failed_at": datetime.now(timezone.utc).isoformat(),
         }
     finally:
