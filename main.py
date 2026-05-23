@@ -316,6 +316,11 @@ async def motion(
     fps: int = Form(16, description="Output fps. Wan native is 16; we re-time in ffmpeg if user wants 24/30."),
     seed: int = Form(-1),
     audio: bool = Form(True, description="Carry the reference video's audio onto the output."),
+    lightning_steps: int = Form(4, description="Sampler steps. Lightning LoRA is calibrated for 4; bump to 6-8 for marginal quality gains at proportional cost.",
+                                ge=2, le=20),
+    sampler_shift: float = Form(5.0, description="Noise schedule shift. 5.0 fits Lightning; 3.0 works for non-distilled, 7-8 for high-res (≥1024p).",
+                                ge=1.0, le=10.0),
+    relight: bool = Form(True, description="Apply the WanAnimate relight LoRA for lighting consistency between character and scene."),
 ):
     """Wan 2.2 Animate character motion transfer.
 
@@ -395,6 +400,9 @@ async def motion(
         character_image_filename=img_filename,
         prompt=prompt, negative_prompt=negative_prompt,
         width=width, height=height, length=length, fps=fps, seed=seed,
+        relight=relight,
+        lightning_steps=lightning_steps,
+        sampler_shift=sampler_shift,
     )
 
     job_id = str(uuid.uuid4())

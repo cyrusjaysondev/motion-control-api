@@ -180,6 +180,10 @@ install_node() {
 install_node "https://github.com/kijai/ComfyUI-WanVideoWrapper" "ComfyUI-WanVideoWrapper"
 install_node "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite" "ComfyUI-VideoHelperSuite"
 install_node "https://github.com/Fannovel16/comfyui_controlnet_aux" "comfyui_controlnet_aux"
+# AIGCTV/kijai pose-extraction nodes — VitPose + YOLO ONNX runtime,
+# PoseAndFaceDetection, DrawViTPose. Required by workflows.py since
+# the port to kijai's WanVideoWrapper graph.
+install_node "https://github.com/kijai/ComfyUI-WanAnimatePreprocess" "ComfyUI-WanAnimatePreprocess"
 log "  Done"
 
 # ─────────────────────────────────────────────
@@ -187,8 +191,9 @@ log "  Done"
 #    Source: Kijai/WanVideo_comfy on HuggingFace — pre-packaged for
 #    the ComfyUI-WanVideoWrapper node layout.
 # ─────────────────────────────────────────────
-log "[3/4] Downloading Wan 2.2 Animate models..."
-mkdir -p "$MODELS/diffusion_models" "$MODELS/vae" "$MODELS/text_encoders"
+log "[3/4] Downloading Wan 2.2 Animate models (AIGCTV/kijai stack)..."
+mkdir -p "$MODELS/diffusion_models" "$MODELS/vae" "$MODELS/text_encoders" \
+         "$MODELS/loras" "$MODELS/clip_vision" "$MODELS/detection"
 
 ARIA2_INPUT="/tmp/motion-downloads.txt"
 HF="https://huggingface.co"
@@ -199,34 +204,64 @@ HF="https://huggingface.co"
 #     out=<filename>
 # `aria2c -i` reads this format. -x 16 -s 16 = 16 connections per file.
 #
-# Files (per Comfy's official Wan 2.2 Animate workflow docs at
-# docs.comfy.org/tutorials/video/wan/wan2-2-animate):
-#   - Diffusion model: Comfy-Org/Wan_2.2_ComfyUI_Repackaged
-#     wan2.2_animate_14B_bf16.safetensors (33 GB)
-#     Use Comfy native UNETLoader with weight_dtype=fp8_e4m3fn at
-#     runtime to fit in 24 GB VRAM (RTX 4090). RTX 5090 can use
-#     default bf16.
-#   - VAE: wan_2.1_vae.safetensors (Comfy-Org)
-#   - Text encoder: umt5_xxl_fp8_e4m3fn_scaled.safetensors (Comfy-Org)
-#   - LoRA (optional, recommended): wan2.2_animate_14B_relight_lora_bf16
-#     (1.4 GB) — improves scene integration / relighting
-mkdir -p "$MODELS/loras"
+# Files (per the AIGCTV walkthrough — Wan 2.2 Animate via kijai's
+# WanVideoWrapper graph, NOT Comfy's native WanAnimateToVideo path):
+#
+#   Diffusion: Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2 (17 GB)
+#     Pre-quantized fp8 from Kijai/WanVideo_comfy_fp8_scaled.
+#     Loaded by WanVideoModelLoader (not Comfy's UNETLoader).
+#
+#   VAE: Wan2_1_VAE_fp32 (500 MB) from Kijai/WanVideo_comfy.
+#     fp32 is the "master" the wrapper expects; precision cast happens
+#     in WanVideoVAELoader (we use bf16).
+#
+#   Text encoder: umt5-xxl-enc-fp8_e4m3fn (6.7 GB) from Kijai's repo.
+#     Loaded by WanVideoTextEncodeCached (caches across runs).
+#
+#   CLIP Vision: clip_vision_h (1.2 GB) — identity encoding for the
+#     character image so Wan doesn't drift in the first frames.
+#
+#   LoRAs:
+#     - WanAnimate_relight_lora_fp16 (1.4 GB) — lighting consistency
+#     - Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16 (~600 MB) —
+#       4-step distillation, drops sampling from 20 → 4 steps. THE big
+#       speed win in the AIGCTV stack.
+#
+#   Detection (kijai/ComfyUI-WanAnimatePreprocess):
+#     - vitpose-l-wholebody.onnx (1.2 GB) — body + hands + face
+#     - yolov10m.onnx (60 MB) — person bbox for cropping
 cat > "$ARIA2_INPUT" <<EOF
-$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors
+$HF/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/Wan22Animate/Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors
   dir=$MODELS/diffusion_models
-  out=wan2.2_animate_14B_bf16.safetensors
+  out=Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors
 
-$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors
+$HF/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_fp32.safetensors
   dir=$MODELS/vae
-  out=wan_2.1_vae.safetensors
+  out=Wan2_1_VAE_fp32.safetensors
 
-$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+$HF/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors
   dir=$MODELS/text_encoders
-  out=umt5_xxl_fp8_e4m3fn_scaled.safetensors
+  out=umt5-xxl-enc-fp8_e4m3fn.safetensors
 
-$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors
+$HF/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors
+  dir=$MODELS/clip_vision
+  out=clip_vision_h.safetensors
+
+$HF/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_relight/WanAnimate_relight_lora_fp16.safetensors
   dir=$MODELS/loras
-  out=wan2.2_animate_14B_relight_lora_bf16.safetensors
+  out=WanAnimate_relight_lora_fp16.safetensors
+
+$HF/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22-Lightning/old/Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors
+  dir=$MODELS/loras
+  out=Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors
+
+$HF/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx
+  dir=$MODELS/detection
+  out=yolov10m.onnx
+
+$HF/JunkyByte/easy_ViTPose/resolve/main/onnx/wholebody/vitpose-l-wholebody.onnx
+  dir=$MODELS/detection
+  out=vitpose-l-wholebody.onnx
 EOF
 
 ARIA_AUTH=()
@@ -235,15 +270,20 @@ ARIA_AUTH=()
 # --auto-file-renaming=false + --allow-overwrite=true: resume partials,
 # don't create .1 .2 duplicates. --max-tries=3: bail on persistent 404.
 if aria2c -j 4 -x 16 -s 16 -k 1M --auto-file-renaming=false \
-    --allow-overwrite=true --max-tries=3 --retry-wait=5 \
+    --allow-overwrite=false --max-tries=3 --retry-wait=5 \
     "${ARIA_AUTH[@]}" -i "$ARIA2_INPUT" 2>&1 | tail -30 | tee -a "$LOG"; then
-  log "  Model downloads OK"
+  log "  Model downloads OK (~27 GB total — Wan KJ_v2 + VAE + umt5 + CLIP-H + 2 LoRAs + 2 ONNX detectors)"
 else
   log "  WARN: one or more model downloads failed. Check URLs above and re-run."
   log "  Expected files (verify on HF if 404):"
-  log "    Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors"
-  log "    Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/vae/wan_2.1_vae.safetensors"
-  log "    Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+  log "    Kijai/WanVideo_comfy_fp8_scaled/Wan22Animate/Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors"
+  log "    Kijai/WanVideo_comfy/Wan2_1_VAE_fp32.safetensors"
+  log "    Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+  log "    Comfy-Org/Wan_2.1_ComfyUI_repackaged/split_files/clip_vision/clip_vision_h.safetensors"
+  log "    Kijai/WanVideo_comfy/LoRAs/Wan22_relight/WanAnimate_relight_lora_fp16.safetensors"
+  log "    Kijai/WanVideo_comfy/LoRAs/Wan22-Lightning/old/Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors"
+  log "    Wan-AI/Wan2.2-Animate-14B/process_checkpoint/det/yolov10m.onnx"
+  log "    JunkyByte/easy_ViTPose/onnx/wholebody/vitpose-l-wholebody.onnx"
 fi
 
 # ─────────────────────────────────────────────
