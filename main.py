@@ -444,6 +444,12 @@ async def motion(
         sampler_shift=sampler_shift,
     )
 
+    # Pull the auto-sized swap + tile values out for the response so
+    # callers can see what the workload-scaler chose. The block_swap
+    # node is "103" in workflows.build_wan_motion_workflow.
+    chosen_blocks_to_swap = workflow.get("103", {}).get("inputs", {}).get("blocks_to_swap")
+    chosen_tile_vae = workflow.get("200", {}).get("inputs", {}).get("enable_vae_tiling")
+
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "queued", "created_at": datetime.now(timezone.utc).isoformat()}
     background_tasks.add_task(run_job, job_id, workflow, cleanup_paths, audio_source_path)
@@ -454,6 +460,11 @@ async def motion(
         "poll_url": f"{BASE_URL}/status/{job_id}",
         "ref_video_normalized_to": {"width": width, "height": height, "fps": fps, "frames": length},
         "audio_source": "reference" if audio else "none",
+        "vram_config": {
+            "blocks_to_swap": chosen_blocks_to_swap,
+            "vae_tiling": chosen_tile_vae,
+            "megapixel_frames": round(width * height * (2 * length) / 1_000_000, 1),
+        },
     }
 
 

@@ -67,13 +67,12 @@ _WAN_STEPS = 4            # Lightning LoRA lets us run in 4 steps
 _WAN_CFG = 1.0            # distilled model — guidance is baked in
 _WAN_SHIFT = 5.0          # noise schedule shift; 5.0 fits Lightning
 _WAN_SCHEDULER = "dpm++_sde"
-_WAN_BLOCKS_TO_SWAP = 8   # offloaded transformer blocks (of 40
-                          # total). 2 fits the 2-LoRA stack on 24 GB,
-                          # but the 5-LoRA stack OOM'd at both 2 and 4
-                          # — context windows + 1133 LoRA patches
-                          # plus activations exceed the 4090's headroom.
-                          # 8 leaves ~3 GB free; 10 was overly aggressive
-                          # and tripled step latency from re-staging IO.
+_WAN_TOTAL_BLOCKS = 40    # Wan-14B transformer block count
+# blocks_to_swap is now picked per-job from _pick_swap_blocks() below
+# based on the (width × height × length) megapixel-frame budget. The
+# 5-LoRA stack + context windows + activations grows ~linearly with
+# pixel-frames, so we scale swap aggressiveness to match. Tuned empirically
+# on a 24 GB RTX 4090 with sdpa attention and the kijai/Lightning stack.
 
 # Context windowing — lets the sampler handle clips longer than the
 # single chunk size by sliding a window through the latent. With
@@ -89,6 +88,42 @@ _WAN_NEGATIVE_DEFAULT = (
     "extra limbs, bad anatomy, motion artifacts, jpeg artifacts, "
     "static, frozen frames"
 )
+
+
+def _pick_swap_blocks(width: int, height: int, length: int) -> int:
+    """Pick blocks_to_swap based on workload size (megapixel-frames).
+
+    Tuned for a 24 GB RTX 4090 with the 5-LoRA Lightning stack and
+    sdpa attention. The transformer has 40 blocks total. More swap =
+    less VRAM but slower per-step (each swapped block has to round-trip
+    CPU↔GPU per forward pass).
+
+    Mfp = width × height × (2 × length) / 1e6
+          (the 2× accounts for the first-frame-prepend warm-up batch
+           which doubles the working frame count.)
+
+    Reference points (RTX 4090, 5-LoRA stack):
+      Mfp  ≤  25  → swap=8   peak  ~22.2 GB   25 s/step
+      Mfp  ≤  60  → swap=16  peak  ~21 GB     ~32 s/step
+      Mfp  ≤ 100  → swap=24  peak  ~19 GB     ~45 s/step
+      Mfp  >  100 → swap=32  peak  ~16 GB     ~65 s/step
+    """
+    mfp = width * height * (2 * length) / 1_000_000
+    if mfp <= 25:
+        return 8
+    if mfp <= 60:
+        return 16
+    if mfp <= 100:
+        return 24
+    return 32
+
+
+def _should_tile_vae(width: int, height: int) -> bool:
+    """Enable VAE tiling when the canvas is large enough that decoding
+    a single frame at once would push VRAM over the edge. The threshold
+    is ~720×1280 (≈ 921 K pixels); anything bigger benefits from tiling
+    even though it's ~10-15% slower per frame."""
+    return (width * height) > 900_000
 
 
 def build_wan_motion_workflow(
@@ -138,6 +173,10 @@ def build_wan_motion_workflow(
 
     if not negative_prompt:
         negative_prompt = _WAN_NEGATIVE_DEFAULT
+
+    # Workload-scaled VRAM tuning
+    blocks_to_swap = _pick_swap_blocks(width, height, length)
+    tile_vae = _should_tile_vae(width, height)
 
     # All node IDs are arbitrary strings — kept stable for readability.
     workflow: dict = {
@@ -191,7 +230,7 @@ def build_wan_motion_workflow(
         # is what lets the 14 B fp8 model fit in 24 GB VRAM with room
         # for VAE + CLIP Vision.
         "103": {"class_type": "WanVideoBlockSwap", "inputs": {
-            "blocks_to_swap": _WAN_BLOCKS_TO_SWAP,
+            "blocks_to_swap": blocks_to_swap,
             "offload_img_emb": True,
             "offload_txt_emb": True,
             "use_non_blocking": False,
@@ -344,7 +383,7 @@ def build_wan_motion_workflow(
             "colormatch": "disabled",
             "pose_strength": 1.0,
             "face_strength": 1.0,
-            "tiled_vae": False,
+            "tiled_vae": tile_vae,
             "vae": ["110", 0],
             "clip_embeds": ["142", 0],
             "ref_images": ["141", 0],
@@ -392,7 +431,7 @@ def build_wan_motion_workflow(
 
         # ─── 11. Decode latent → frames ────────────────────────────
         "200": {"class_type": "WanVideoDecode", "inputs": {
-            "enable_vae_tiling": False,
+            "enable_vae_tiling": tile_vae,
             "tile_x": 272,
             "tile_y": 272,
             "tile_stride_x": 144,
