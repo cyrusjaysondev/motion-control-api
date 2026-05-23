@@ -243,13 +243,12 @@ def build_wan_motion_workflow(
         "150": {"class_type": "VHS_LoadVideo", "inputs": {
             "video": reference_video_filename,
             "force_rate": float(fps),
-            "force_size": "Disabled",
             "custom_width": 0,
             "custom_height": 0,
-            "frame_load_cap": length,
+            "frame_load_cap": int(length),
             "skip_first_frames": 0,
             "select_every_nth": 1,
-            "format": "AnimateDiff",
+            "format": "Wan",
         }},
         # First-frame-prepend warm-up: take the first frame, repeat it
         # `length` times, then concat with the actual video. The model
