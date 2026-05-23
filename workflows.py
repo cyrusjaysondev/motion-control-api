@@ -51,6 +51,14 @@ _WAN_TEXT_ENCODER = "umt5-xxl-enc-fp8_e4m3fn.safetensors"
 _WAN_CLIP_VISION = "clip_vision_h.safetensors"
 _WAN_RELIGHT_LORA = "WanAnimate_relight_lora_fp16.safetensors"
 _WAN_LIGHTNING_LORA = "Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors"
+# Quality-enhancement LoRAs from the AIGCTV stack — stacked at 1.0
+# each, they're additive (no destructive conflict observed in the
+# tutorial). FastWan = speed/quality co-distillation. PusaV1 = motion
+# smoothness rank-512. Fun-HPS2.1 = Human-Preference-Score reward
+# fine-tune for face/anatomy quality.
+_WAN_FASTWAN_LORA = "FastWan_T2V_14B_480p_lora_rank_128_bf16.safetensors"
+_WAN_PUSA_LORA = "Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors"
+_WAN_FUN_HPS_LORA = "Wan2.2-Fun-A14B-InP-LOW-HPS2.1_bf16.safetensors"
 _VITPOSE_MODEL = "vitpose-l-wholebody.onnx"
 _YOLO_MODEL = "yolov10m.onnx"
 
@@ -144,17 +152,26 @@ def build_wan_motion_workflow(
             "rms_norm_function": "default",
         }},
 
-        # LoRA stack: relight LoRA (optional, for lighting consistency)
-        # + Lightning LoRA (cuts sampling to 4 steps). Empty slots are
-        # required by WanVideoLoraSelectMulti's 5-slot schema.
+        # LoRA stack — matches the AIGCTV walkthrough's 5-LoRA chain:
+        #   relight  → lighting consistency (1.4 GB, optional via flag)
+        #   Lightning → 4-step distillation                 (~600 MB)
+        #   FastWan  → speed/quality co-distill rank-128    (~1.2 GB)
+        #   PusaV1   → motion smoothness rank-512           (~4.9 GB)
+        #   Fun-HPS  → Human-Preference reward fine-tune    (~100 MB)
+        # All at strength 1.0. The relight slot drops to 0.0 when the
+        # /motion `relight` flag is false (keeps the LoRA loaded but
+        # zeroed — cheaper than rebuilding the model graph each call).
         "101": {"class_type": "WanVideoLoraSelectMulti", "inputs": {
-            "lora_0": _WAN_RELIGHT_LORA if relight else "none",
+            "lora_0": _WAN_RELIGHT_LORA,
             "strength_0": 1.0 if relight else 0.0,
             "lora_1": _WAN_LIGHTNING_LORA,
             "strength_1": 1.0,
-            "lora_2": "none", "strength_2": 1.0,
-            "lora_3": "none", "strength_3": 1.0,
-            "lora_4": "none", "strength_4": 1.0,
+            "lora_2": _WAN_FASTWAN_LORA,
+            "strength_2": 1.0,
+            "lora_3": _WAN_PUSA_LORA,
+            "strength_3": 1.0,
+            "lora_4": _WAN_FUN_HPS_LORA,
+            "strength_4": 1.0,
             "low_mem_load": False,
             "merge_loras": False,
         }},

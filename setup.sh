@@ -255,6 +255,18 @@ $HF/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22-Lightning/old/Wan2.2-Lightning
   dir=$MODELS/loras
   out=Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors
 
+$HF/Kijai/WanVideo_comfy/resolve/main/FastWan/FastWan_T2V_14B_480p_lora_rank_128_bf16.safetensors
+  dir=$MODELS/loras
+  out=FastWan_T2V_14B_480p_lora_rank_128_bf16.safetensors
+
+$HF/Kijai/WanVideo_comfy/resolve/main/Pusa/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors
+  dir=$MODELS/loras
+  out=Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors
+
+$HF/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_FunReward/Wan2.2-Fun-A14B-InP-LOW-HPS2.1_resized_dynamic_avg_rank_15_bf16.safetensors
+  dir=$MODELS/loras
+  out=Wan2.2-Fun-A14B-InP-LOW-HPS2.1_bf16.safetensors
+
 $HF/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx
   dir=$MODELS/detection
   out=yolov10m.onnx
