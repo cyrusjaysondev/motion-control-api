@@ -199,25 +199,34 @@ HF="https://huggingface.co"
 #     out=<filename>
 # `aria2c -i` reads this format. -x 16 -s 16 = 16 connections per file.
 #
-# IMPORTANT: these are placeholder URLs based on kijai's repo conventions.
-# If a 404 occurs during the aria2 run, check Kijai/WanVideo_comfy on HF
-# and update the paths below. Files we need:
-#   - Wan 2.2 Animate diffusion model (FP16 or FP8 — start FP8 for RTX 4090,
-#     swap to FP16 if running on RTX 5090 with 32GB)
-#   - Wan 2.1 VAE
-#   - UMT5 XXL text encoder (FP8)
+# Files (per Comfy's official Wan 2.2 Animate workflow docs at
+# docs.comfy.org/tutorials/video/wan/wan2-2-animate):
+#   - Diffusion model: Comfy-Org/Wan_2.2_ComfyUI_Repackaged
+#     wan2.2_animate_14B_bf16.safetensors (33 GB)
+#     Use Comfy native UNETLoader with weight_dtype=fp8_e4m3fn at
+#     runtime to fit in 24 GB VRAM (RTX 4090). RTX 5090 can use
+#     default bf16.
+#   - VAE: wan_2.1_vae.safetensors (Comfy-Org)
+#   - Text encoder: umt5_xxl_fp8_e4m3fn_scaled.safetensors (Comfy-Org)
+#   - LoRA (optional, recommended): wan2.2_animate_14B_relight_lora_bf16
+#     (1.4 GB) — improves scene integration / relighting
+mkdir -p "$MODELS/loras"
 cat > "$ARIA2_INPUT" <<EOF
-$HF/Kijai/WanVideo_comfy/resolve/main/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors
+$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors
   dir=$MODELS/diffusion_models
-  out=Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors
+  out=wan2.2_animate_14B_bf16.safetensors
 
-$HF/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors
+$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors
   dir=$MODELS/vae
-  out=Wan2_1_VAE_bf16.safetensors
+  out=wan_2.1_vae.safetensors
 
-$HF/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-bf16.safetensors
+$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
   dir=$MODELS/text_encoders
-  out=umt5-xxl-enc-bf16.safetensors
+  out=umt5_xxl_fp8_e4m3fn_scaled.safetensors
+
+$HF/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors
+  dir=$MODELS/loras
+  out=wan2.2_animate_14B_relight_lora_bf16.safetensors
 EOF
 
 ARIA_AUTH=()
@@ -225,16 +234,16 @@ ARIA_AUTH=()
 
 # --auto-file-renaming=false + --allow-overwrite=true: resume partials,
 # don't create .1 .2 duplicates. --max-tries=3: bail on persistent 404.
-if aria2c -j 3 -x 16 -s 16 -k 1M --auto-file-renaming=false \
+if aria2c -j 4 -x 16 -s 16 -k 1M --auto-file-renaming=false \
     --allow-overwrite=true --max-tries=3 --retry-wait=5 \
     "${ARIA_AUTH[@]}" -i "$ARIA2_INPUT" 2>&1 | tail -30 | tee -a "$LOG"; then
   log "  Model downloads OK"
 else
   log "  WARN: one or more model downloads failed. Check URLs above and re-run."
   log "  Expected files (verify on HF if 404):"
-  log "    Kijai/WanVideo_comfy/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors"
-  log "    Kijai/WanVideo_comfy/Wan2_1_VAE_bf16.safetensors"
-  log "    Kijai/WanVideo_comfy/umt5-xxl-enc-bf16.safetensors"
+  log "    Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors"
+  log "    Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/vae/wan_2.1_vae.safetensors"
+  log "    Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 fi
 
 # ─────────────────────────────────────────────
