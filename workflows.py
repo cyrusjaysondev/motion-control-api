@@ -67,7 +67,11 @@ _WAN_STEPS = 4            # Lightning LoRA lets us run in 4 steps
 _WAN_CFG = 1.0            # distilled model — guidance is baked in
 _WAN_SHIFT = 5.0          # noise schedule shift; 5.0 fits Lightning
 _WAN_SCHEDULER = "dpm++_sde"
-_WAN_BLOCKS_TO_SWAP = 2   # offloaded transformer blocks for VRAM
+_WAN_BLOCKS_TO_SWAP = 10  # offloaded transformer blocks (5-LoRA stack
+                          # needs more aggressive swap on a 24 GB 4090 —
+                          # 2 was enough with only relight+Lightning,
+                          # but FastWan+Pusa+Fun pushed allocation
+                          # ~95 MB past the device limit).
 
 # Context windowing — lets the sampler handle clips longer than the
 # single chunk size by sliding a window through the latent. With
