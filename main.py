@@ -624,6 +624,45 @@ async def admin_restart_comfyui(authorization: str = Header(default=None)):
     }
 
 
+@app.get("/admin/log")
+async def admin_log(
+    name: str = "api",
+    lines: int = 200,
+    authorization: str = Header(default=None),
+):
+    """Tail one of the on-disk logs so we can read tracebacks without SSH.
+    name=api → /workspace/api.log
+    name=comfy → /workspace/comfy.log (whatever start_comfy.sh writes)
+    name=setup → /workspace/motion_setup.log
+    name=shim → /workspace/motion-shim.log"""
+    _require_admin(authorization)
+    log_map = {
+        "api": "/workspace/api.log",
+        "api_setup": "/workspace/api_setup.log",
+        "comfy": "/workspace/comfy.log",
+        "comfy_setup": "/workspace/comfy_setup.log",
+        "setup": "/workspace/motion_setup.log",
+        "shim": "/workspace/motion-shim.log",
+    }
+    path = log_map.get(name)
+    if not path:
+        raise HTTPException(400, f"unknown log '{name}' — known: {list(log_map.keys())}")
+    if not Path(path).is_file():
+        raise HTTPException(404, f"{path} does not exist")
+    try:
+        res = subprocess.run(
+            ["tail", "-n", str(max(1, min(lines, 2000))), path],
+            capture_output=True, timeout=10,
+        )
+        return {
+            "path": path,
+            "lines_requested": lines,
+            "body": (res.stdout + res.stderr).decode(errors="replace"),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"tail failed: {e}")
+
+
 @app.get("/admin/disk-status")
 async def admin_disk_status(authorization: str = Header(default=None)):
     """Run df + a couple of du checks so we can see what the kernel
