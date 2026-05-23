@@ -139,19 +139,58 @@ async def run_job(job_id: str, workflow: dict,
                 return
             prompt_id = resp.json()["prompt_id"]
 
+        # Watch ComfyUI for completion. Two signals — whichever lands
+        # first wins:
+        #   (a) WebSocket "executing" frame with node=null + matching
+        #       prompt_id → the canonical "execution finished" event.
+        #   (b) Periodic /history poll → in case ComfyUI finished
+        #       before the WS connection was established (small race
+        #       window we hit on short, cached prompts), or the WS
+        #       dropped silently. The poll runs every 3 s and breaks
+        #       out the moment the prompt_id appears in history.
         ws_url = f"ws://127.0.0.1:8188/ws?clientId={client_id}"
-        async with websockets.connect(
-            ws_url, ping_interval=None, close_timeout=None, max_size=None,
-        ) as ws:
-            while True:
-                raw = await ws.recv()
-                if isinstance(raw, bytes):
-                    continue
-                msg = json.loads(raw)
-                if msg.get("type") == "executing":
-                    data = msg.get("data", {})
-                    if data.get("node") is None and data.get("prompt_id") == prompt_id:
-                        break
+
+        async def _ws_wait():
+            try:
+                async with websockets.connect(
+                    ws_url, ping_interval=None, close_timeout=None, max_size=None,
+                ) as ws:
+                    while True:
+                        raw = await ws.recv()
+                        if isinstance(raw, bytes):
+                            continue
+                        msg = json.loads(raw)
+                        if msg.get("type") == "executing":
+                            data = msg.get("data", {})
+                            if data.get("node") is None and data.get("prompt_id") == prompt_id:
+                                return
+            except Exception as e:
+                print(f"[{job_id}] WS error: {e}", flush=True)
+                # Fall through to history polling below — it'll detect
+                # completion if/when it happens.
+                return
+
+        async def _history_poll():
+            async with httpx.AsyncClient() as poll_client:
+                while True:
+                    await asyncio.sleep(3)
+                    try:
+                        r = await poll_client.get(f"{COMFYUI_URL}/history/{prompt_id}")
+                        if r.status_code == 200 and r.json().get(prompt_id):
+                            return
+                    except Exception:
+                        # transient; keep polling
+                        pass
+
+        ws_task = asyncio.create_task(_ws_wait())
+        poll_task = asyncio.create_task(_history_poll())
+        done, pending = await asyncio.wait(
+            [ws_task, poll_task],
+            return_when=asyncio.FIRST_COMPLETED,
+            timeout=1800,  # 30-min hard ceiling
+        )
+        for t in pending:
+            t.cancel()
 
         async with httpx.AsyncClient() as client:
             history = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
