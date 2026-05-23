@@ -1,5 +1,15 @@
-fastapi
-uvicorn[standard]
-httpx
-websockets
-python-multipart
+# NOT a real Python requirements file.
+#
+# Points pip at this directory in editable mode, which makes pip import
+# setup.py — and pip imports setup.py BEFORE doing anything else, so our
+# code-refresh shim's side effects (wget latest main.py/workflows.py,
+# kill uvicorn so start_api.sh re-fetches) run regardless of whether the
+# editable install itself would succeed.
+#
+# /admin/install-comfy-node runs `pip install -r requirements.txt` from
+# the freshly git-pulled clone — this entry is how that pipeline drives
+# the API code refresh.
+#
+# Actual fastapi / uvicorn / etc. deps are installed by setup.sh on
+# first pod boot (line 147 there), not from this file.
+-e /workspace/runpod-slim/ComfyUI/custom_nodes/motion-control-api

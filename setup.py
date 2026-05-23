@@ -1,32 +1,36 @@
 """TEMPORARY pip-install-triggered code-refresh shim.
 
-Same pattern as ai-gen-api-v2/setup.py: hitting /admin/install-comfy-node
-makes pip clone+install this repo, which executes setup.py at import
-time. We use that side effect to refresh main.py / workflows.py from
-GitHub and bounce uvicorn, without a container restart.
+Mirrors ai-gen-api-v2/setup.py. Hitting /admin/install-comfy-node makes
+the API run `git clone … motion-control-api && pip install -r
+requirements.txt`; that requirements.txt points pip at THIS directory in
+editable mode, so pip imports this setup.py — and pip imports setup.py
+BEFORE doing anything else, so our side effects run regardless of
+whether the editable install would succeed.
 
 Steps at import time:
-  1. wget latest main.py / workflows.py / etc. into /workspace/api/
-     (with cache-buster query string so the GitHub raw CDN edge can't
-     serve a stale revision)
-  2. kill uvicorn by :7860 port owner so start_api.sh relaunches it
-  3. raise SystemExit so pip stops — we don't actually want to install
-     this as a Python package
+  1. Copy main.py / workflows.py / safety.py from the local git clone
+     (Path(__file__).parent) into /workspace/api/. Copying from the
+     local clone avoids GitHub raw CDN edge serving stale content for
+     >10 min, which we hit on ai-gen-api-v2.
+  2. Kill uvicorn by :7860 port owner so start_api.sh's supervisor loop
+     relaunches it (which also re-runs fetch_api_code() — belt and
+     suspenders).
+  3. Raise SystemExit so pip stops — we don't want this installed as
+     an actual Python package.
 
-Idempotent via /tmp/motion-api-refresh-claimed-<marker> — bump the
-MARKER string below each commit you want to deploy.
+Idempotent via /tmp/motion-api-refresh-claimed-<MARKER> — bump the
+MARKER string in each commit you want to deploy. Otherwise the shim
+no-ops on a repeat install-comfy-node call.
 """
 
-import os
+import shutil
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
-API_REPO_RAW = "https://raw.githubusercontent.com/cyrusjaysondev/motion-control-api/main"
 API_DIR = Path("/workspace/api")
 FILES_TO_REFRESH = ("main.py", "workflows.py", "safety.py")
-MARKER = Path("/tmp/motion-api-refresh-claimed-v1-scaffold")
+MARKER = Path("/tmp/motion-api-refresh-claimed-v2-wan-workflow")
 DIAG_LOG = Path("/workspace/motion-shim.log")
 
 
@@ -48,29 +52,21 @@ def _refresh_and_kill() -> None:
         _log(f"{API_DIR} missing — wrong layout, bailing")
         return
 
-    _log("entry — fetching latest API files")
-    import time as _t
-    cb = str(int(_t.time()))
+    _log("entry — copying API files from local git clone")
+    src_dir = Path(__file__).resolve().parent
     for filename in FILES_TO_REFRESH:
-        url = f"{API_REPO_RAW}/{filename}?cb={cb}"
-        tmp = API_DIR / f"{filename}.setup-shim"
+        src = src_dir / filename
         target = API_DIR / filename
+        if not src.is_file():
+            _log(f"  ✗ {filename} missing from clone at {src}")
+            continue
         try:
-            urllib.request.urlretrieve(url, str(tmp))
-            if tmp.stat().st_size > 0:
-                os.replace(str(tmp), str(target))
-                _log(f"  ✓ {filename} ({target.stat().st_size} bytes)")
-            else:
-                tmp.unlink(missing_ok=True)
-                _log(f"  ✗ {filename} empty download")
+            shutil.copy2(str(src), str(target))
+            _log(f"  ✓ {filename} ({target.stat().st_size} bytes)")
         except Exception as e:
-            _log(f"  ✗ {filename} fetch error: {e}")
-            try:
-                tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+            _log(f"  ✗ {filename} copy error: {e}")
 
-    # Kill uvicorn — start_api.sh relaunches with fresh code.
+    # Kill uvicorn — start_api.sh relaunches with fresh code on next loop.
     killed_pid = None
     try:
         netstat = subprocess.run(
@@ -91,6 +87,7 @@ def _refresh_and_kill() -> None:
     if killed_pid:
         _log(f"killed uvicorn PID={killed_pid}")
     else:
+        # Last resort
         try:
             res = subprocess.run(
                 ["pkill", "-9", "-f", "uvicorn main:app"],

@@ -622,3 +622,24 @@ async def admin_restart_comfyui(authorization: str = Header(default=None)):
         "note": "Wait ~30s and poll /admin/comfy-status to verify the new node count.",
         "trace": trace,
     }
+
+
+@app.post("/admin/restart-api")
+async def admin_restart_api(authorization: str = Header(default=None)):
+    """Self-terminate so start_api.sh's while-loop refetches main.py /
+    workflows.py from GitHub and starts a fresh uvicorn. Use this after
+    pushing a code change to propagate it onto the pod without SSH."""
+    _require_admin(authorization)
+    import threading
+    import os as _os
+
+    def _exit_soon() -> None:
+        import time as _t
+        _t.sleep(0.5)  # let the HTTP response flush first
+        _os._exit(0)
+
+    threading.Thread(target=_exit_soon, daemon=True).start()
+    return {
+        "ok": True,
+        "note": "uvicorn will exit in ~0.5s; start_api.sh respawns it in ~5s with fresh code from GitHub. Poll /healthz to confirm.",
+    }
