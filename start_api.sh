@@ -2,10 +2,23 @@
 # =============================================================
 # motion-control-api — FastAPI supervisor on :7860
 #
-# Fetches latest main.py / workflows.py from GitHub at the START of
-# every loop iteration so that any commit on main propagates to the
-# running pod on the next uvicorn restart (matches ai-gen-api-v2's
-# `fetch_api_code` + loop pattern).
+# CHANGED from the original wget-on-every-loop fetch: the supervisor
+# no longer auto-fetches main.py/workflows.py from GitHub raw at the
+# start of each iteration. That mechanism was racing against the
+# setup.py shim — the shim would shutil.copy2 the freshly cloned
+# files in, then the supervisor's wget would overwrite them with
+# stale CDN content on the very next uvicorn restart, so /motion
+# kept running the old code.
+#
+# New deploy flow: code refreshes happen ONLY through the setup.py
+# shim, triggered by POST /admin/install-comfy-node. The shim does
+# `shutil.copy2(src=local_clone, dst=/workspace/api/)` — local IO,
+# no CDN involved — and SIGKILLs uvicorn. The supervisor below just
+# restarts whatever main.py is on disk. (The shim's git clone /
+# git pull at install-time is the cache-busting source of truth.)
+#
+# Manual fallback: `/admin/exec-shell` can curl-and-replace files
+# directly when we need an out-of-band patch.
 # =============================================================
 LOG_SETUP="/workspace/api_setup.log"
 LOG_OUT="/workspace/api.log"
@@ -31,8 +44,8 @@ set -a
 source /workspace/api/config.env
 set +a
 
-if [ -z "$PYTHON" ] || [ -z "$API_DIR" ] || [ -z "$API_REPO" ]; then
-  log "ERROR: PYTHON / API_DIR / API_REPO missing from config.env"
+if [ -z "$PYTHON" ] || [ -z "$API_DIR" ]; then
+  log "ERROR: PYTHON / API_DIR missing from config.env"
   exit 1
 fi
 
@@ -45,26 +58,9 @@ if [ -n "$STALE_PID" ] && [ "$STALE_PID" != "-" ]; then
   kill -9 "$STALE_PID" 2>/dev/null || true
 fi
 
-fetch_api_code() {
-  # Re-fetch on every loop iteration so a fresh push to main propagates
-  # to the next uvicorn launch. Cache-busted via ?cb=<unix_ts> to dodge
-  # any stale GitHub raw CDN edge.
-  local cb; cb=$(date +%s)
-  for f in main.py workflows.py safety.py setup.py; do
-    local url="$API_REPO/$f?cb=$cb"
-    local tmp="$API_DIR/$f.fetch"
-    if wget -q "$url" -O "$tmp" && [ -s "$tmp" ]; then
-      mv "$tmp" "$API_DIR/$f"
-    else
-      rm -f "$tmp"
-    fi
-  done
-}
-
 cd "$API_DIR" || exit 1
-log "Starting FastAPI supervisor on port $PORT..."
+log "Starting FastAPI supervisor on port $PORT (shim-only deploy mode)..."
 while true; do
-  fetch_api_code
   "$PYTHON" -m uvicorn main:app --host 0.0.0.0 --port "$PORT" >> "$LOG_OUT" 2>&1
   EXIT_CODE=$?
   log "uvicorn exited with code $EXIT_CODE — restarting in 5s..."
