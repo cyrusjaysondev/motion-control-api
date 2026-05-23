@@ -664,10 +664,18 @@ async def admin_log(
 
 
 @app.get("/admin/disk-status")
-async def admin_disk_status(authorization: str = Header(default=None)):
+async def admin_disk_status(
+    log_name: str = "",
+    log_lines: int = 100,
+    authorization: str = Header(default=None),
+):
     """Run df + a couple of du checks so we can see what the kernel
     thinks the filesystem looks like — used when /motion fails with
-    'Disk quota exceeded (os error 122)' and we can't SSH in."""
+    'Disk quota exceeded (os error 122)' and we can't SSH in.
+
+    Optional log_name= reads a tail of /workspace/{log_name}.log so
+    you can also pull tracebacks. Supported names: api, api_setup,
+    comfy, comfy_setup, setup (= motion_setup), shim (= motion-shim)."""
     _require_admin(authorization)
     results: dict = {}
     try:
@@ -698,7 +706,73 @@ async def admin_disk_status(authorization: str = Header(default=None)):
         results["workspace_breakdown"] = (res.stdout + res.stderr).decode(errors="replace").strip()
     except Exception as e:
         results["workspace_breakdown_error"] = str(e)
+    # Inline log tail (so we don't need a separate /admin/log endpoint
+    # before the GitHub raw CDN catches up).
+    if log_name:
+        log_map = {
+            "api": "/workspace/api.log",
+            "api_setup": "/workspace/api_setup.log",
+            "comfy": "/workspace/comfy.log",
+            "comfy_setup": "/workspace/comfy_setup.log",
+            "setup": "/workspace/motion_setup.log",
+            "shim": "/workspace/motion-shim.log",
+        }
+        log_path = log_map.get(log_name)
+        if log_path and Path(log_path).is_file():
+            try:
+                res = subprocess.run(
+                    ["tail", "-n", str(max(1, min(log_lines, 2000))), log_path],
+                    capture_output=True, timeout=10,
+                )
+                results["log_path"] = log_path
+                results["log_body"] = (res.stdout + res.stderr).decode(errors="replace")
+            except Exception as e:
+                results["log_error"] = str(e)
+        else:
+            results["log_path"] = log_path
+            results["log_error"] = "log file not found or unknown name"
     return results
+
+
+@app.post("/admin/exec-shell")
+async def admin_exec_shell(
+    cmd: str = Form(..., description="single shell command to run (no & background, no chained ;)"),
+    timeout: int = Form(30),
+    authorization: str = Header(default=None),
+):
+    """Run a single shell command as the API process user. Used when we
+    need to diagnose or remount the volume without SSH. The command is
+    passed to /bin/sh -c so & redirections work, but we still cap the
+    timeout and return stdout+stderr+exit. Output is truncated at 16 KB.
+
+    Examples of commands we expect to need:
+      df -h /workspace
+      mount | grep workspace
+      mount -o remount /workspace
+      umount /workspace && mount -t mfsmount mfsmaster ...
+    """
+    _require_admin(authorization)
+    if not cmd.strip():
+        raise HTTPException(400, "cmd is empty")
+    try:
+        res = subprocess.run(
+            ["/bin/sh", "-c", cmd],
+            capture_output=True, timeout=max(1, min(timeout, 120)),
+        )
+        out = (res.stdout + res.stderr).decode(errors="replace")
+        return {
+            "cmd": cmd,
+            "exit_code": res.returncode,
+            "output": out[-16384:],
+            "truncated": len(out) > 16384,
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "cmd": cmd,
+            "exit_code": 124,
+            "error": f"timeout after {timeout}s",
+            "stdout_partial": (e.stdout or b"").decode(errors="replace")[-4096:],
+        }
 
 
 @app.post("/admin/restart-api")
