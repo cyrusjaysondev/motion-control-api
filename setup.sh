@@ -259,9 +259,9 @@ $HF/Kijai/WanVideo_comfy/resolve/main/FastWan/FastWan_T2V_14B_480p_lora_rank_128
   dir=$MODELS/loras
   out=FastWan_T2V_14B_480p_lora_rank_128_bf16.safetensors
 
-$HF/Kijai/WanVideo_comfy/resolve/main/Pusa/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors
+$HF/Kijai/WanVideo_comfy/resolve/main/Pusa/Wan22_PusaV1_lora_LOW_resized_dynamic_avg_rank_98_bf16.safetensors
   dir=$MODELS/loras
-  out=Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors
+  out=Wan22_PusaV1_lora_LOW_resized_rank98_bf16.safetensors
 
 $HF/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_FunReward/Wan2.2-Fun-A14B-InP-LOW-HPS2.1_resized_dynamic_avg_rank_15_bf16.safetensors
   dir=$MODELS/loras

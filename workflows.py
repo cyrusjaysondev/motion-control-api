@@ -57,7 +57,7 @@ _WAN_LIGHTNING_LORA = "Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensor
 # smoothness rank-512. Fun-HPS2.1 = Human-Preference-Score reward
 # fine-tune for face/anatomy quality.
 _WAN_FASTWAN_LORA = "FastWan_T2V_14B_480p_lora_rank_128_bf16.safetensors"
-_WAN_PUSA_LORA = "Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors"
+_WAN_PUSA_LORA = "Wan22_PusaV1_lora_LOW_resized_rank98_bf16.safetensors"
 _WAN_FUN_HPS_LORA = "Wan2.2-Fun-A14B-InP-LOW-HPS2.1_bf16.safetensors"
 _VITPOSE_MODEL = "vitpose-l-wholebody.onnx"
 _YOLO_MODEL = "yolov10m.onnx"
@@ -67,11 +67,11 @@ _WAN_STEPS = 4            # Lightning LoRA lets us run in 4 steps
 _WAN_CFG = 1.0            # distilled model — guidance is baked in
 _WAN_SHIFT = 5.0          # noise schedule shift; 5.0 fits Lightning
 _WAN_SCHEDULER = "dpm++_sde"
-_WAN_BLOCKS_TO_SWAP = 10  # offloaded transformer blocks (5-LoRA stack
-                          # needs more aggressive swap on a 24 GB 4090 —
-                          # 2 was enough with only relight+Lightning,
-                          # but FastWan+Pusa+Fun pushed allocation
-                          # ~95 MB past the device limit).
+_WAN_BLOCKS_TO_SWAP = 4   # offloaded transformer blocks. 2 fits the
+                          # 2-LoRA stack, 4 fits the 5-LoRA stack with
+                          # the resized Pusa LoRA (~1 GB vs 4.9 GB
+                          # original). 10 worked at 22 GB but slowed
+                          # sampling 3x due to repeated block reloads.
 
 # Context windowing — lets the sampler handle clips longer than the
 # single chunk size by sliding a window through the latent. With
