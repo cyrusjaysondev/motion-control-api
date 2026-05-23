@@ -136,7 +136,11 @@ def build_wan_motion_workflow(
             "base_precision": "fp16_fast",
             "quantization": "fp8_e4m3fn_scaled",
             "load_device": "offload_device",
-            "attention_mode": "sageattn",
+            # sdpa = PyTorch's built-in scaled-dot-product attention.
+            # ~10-20% slower than sageattn on Wan-14B but doesn't need
+            # the sageattention pip package (not installed by default
+            # on the runpod/comfyui:latest image we're based on).
+            "attention_mode": "sdpa",
             "rms_norm_function": "default",
         }},
 
