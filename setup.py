@@ -41,7 +41,7 @@ API_DIR = Path("/workspace/api")
 WORKSPACE = Path("/workspace")
 API_FILES = ("main.py", "workflows.py", "safety.py")
 SUPERVISOR_FILES = ("start_api.sh", "start_comfy.sh")
-MARKER = Path("/tmp/motion-api-refresh-claimed-v6-no-fetch-supervisor")
+MARKER = Path("/tmp/motion-api-refresh-claimed-v7-umt5-fp8")
 DIAG_LOG = Path("/workspace/motion-shim.log")
 
 

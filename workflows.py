@@ -35,7 +35,7 @@ Node graph:
 # Wan 2.2 Animate defaults — tuned for RTX 4090 24 GB
 _WAN_MODEL = "wan2.2_animate_14B_bf16.safetensors"
 _WAN_VAE = "Wan2_1_VAE_bf16.safetensors"
-_WAN_TEXT_ENCODER = "umt5-xxl-enc-bf16.safetensors"
+_WAN_TEXT_ENCODER = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 _WAN_RELIGHT_LORA = "wan2.2_animate_14B_relight_lora_bf16.safetensors"
 
 # Sampling defaults per Comfy's official Wan 2.2 Animate template
