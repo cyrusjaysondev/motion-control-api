@@ -162,14 +162,20 @@ log "[2/4] Installing ComfyUI custom nodes..."
 mkdir -p "$NODES"
 
 install_node() {
-  local url="$1"; local name="$2"
+  local url="$1"; local name="$2"; local pin="${3:-}"
   local dir="$NODES/$name"
   if [ -d "$dir/.git" ]; then
     log "  $name: pull..."
     (cd "$dir" && git pull --ff-only 2>&1 | tail -1)
   else
     log "  $name: clone..."
-    git clone --depth 1 "$url" "$dir" 2>&1 | tail -1
+    # No --depth 1 — we may need to checkout an older SHA via the pin
+    # arg, and unshallowing after a partial clone is slow + flaky.
+    git clone "$url" "$dir" 2>&1 | tail -1
+  fi
+  if [ -n "$pin" ]; then
+    log "  $name: pinning to $pin..."
+    (cd "$dir" && git checkout "$pin" 2>&1 | tail -1)
   fi
   if [ -f "$dir/requirements.txt" ]; then
     log "  $name: pip install -r requirements.txt..."
@@ -177,7 +183,13 @@ install_node() {
   fi
 }
 
-install_node "https://github.com/kijai/ComfyUI-WanVideoWrapper" "ComfyUI-WanVideoWrapper"
+# WanVideoWrapper pinned to d18cdb1 ("Fix offload on interrupt", May 5).
+# The May 23 commit (5437b01, "Initial LongCatAvatar 1.5 support")
+# introduced a code path that references an uninitialized variable
+# `multitalk_audio_stride` in WanVideoSampler, breaking every job
+# that doesn't pass the new multitalk audio inputs. Upstream issue
+# not yet filed; pin to the last known-good before that landed.
+install_node "https://github.com/kijai/ComfyUI-WanVideoWrapper" "ComfyUI-WanVideoWrapper" "d18cdb18597f525ef8d613a0cb447080fbab8fce"
 install_node "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite" "ComfyUI-VideoHelperSuite"
 install_node "https://github.com/Fannovel16/comfyui_controlnet_aux" "comfyui_controlnet_aux"
 # AIGCTV/kijai pose-extraction nodes — VitPose + YOLO ONNX runtime,
