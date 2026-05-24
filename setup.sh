@@ -184,6 +184,12 @@ install_node "https://github.com/Fannovel16/comfyui_controlnet_aux" "comfyui_con
 # PoseAndFaceDetection, DrawViTPose. Required by workflows.py since
 # the port to kijai's WanVideoWrapper graph.
 install_node "https://github.com/kijai/ComfyUI-WanAnimatePreprocess" "ComfyUI-WanAnimatePreprocess"
+# SAM2 segmentation for the use_sam2_mask + background_image path
+# (character isolation + background swap on /motion). Provides
+# Sam2Segmentation + DownloadAndLoadSAM2Model. The mask post-processing
+# (GrowMaskWithBlur, BlockifyMask, DrawMaskOnImage) is already in
+# ComfyUI-KJNodes installed by the base runpod/comfyui image.
+install_node "https://github.com/kijai/ComfyUI-segment-anything-2" "ComfyUI-segment-anything-2"
 log "  Done"
 
 # ─────────────────────────────────────────────
@@ -193,7 +199,8 @@ log "  Done"
 # ─────────────────────────────────────────────
 log "[3/4] Downloading Wan 2.2 Animate models (AIGCTV/kijai stack)..."
 mkdir -p "$MODELS/diffusion_models" "$MODELS/vae" "$MODELS/text_encoders" \
-         "$MODELS/loras" "$MODELS/clip_vision" "$MODELS/detection"
+         "$MODELS/loras" "$MODELS/clip_vision" "$MODELS/detection" \
+         "$MODELS/sam2"
 
 ARIA2_INPUT="/tmp/motion-downloads.txt"
 HF="https://huggingface.co"
@@ -274,6 +281,10 @@ $HF/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx
 $HF/JunkyByte/easy_ViTPose/resolve/main/onnx/wholebody/vitpose-l-wholebody.onnx
   dir=$MODELS/detection
   out=vitpose-l-wholebody.onnx
+
+$HF/Kijai/sam2-safetensors/resolve/main/sam2.1_hiera_base_plus.safetensors
+  dir=$MODELS/sam2
+  out=sam2.1_hiera_base_plus.safetensors
 EOF
 
 ARIA_AUTH=()

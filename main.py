@@ -435,6 +435,8 @@ async def motion(
     sampler_shift: float = Form(5.0, description="Noise schedule shift. 5.0 fits Lightning; 3.0 works for non-distilled, 7-8 for high-res (≥1024p).",
                                 ge=1.0, le=10.0),
     relight: bool = Form(True, description="Apply the WanAnimate relight LoRA for lighting consistency between character and scene."),
+    use_sam2_mask: bool = Form(False, description="Enable SAM2 character segmentation. Cleaner character regeneration (no scene bleed), enables background swap. Adds ~15-30 s per job."),
+    background_image: UploadFile | None = File(None, description="Optional new background image. When provided, character is composited onto this scene instead of the ref video's environment. Implies use_sam2_mask=true."),
 ):
     """Wan 2.2 Animate character motion transfer.
 
@@ -509,6 +511,19 @@ async def motion(
     else:
         Path(raw_video_path).unlink(missing_ok=True)
 
+    # Background-swap image (optional, implies use_sam2_mask=True
+    # workflow-side). Saved into the ComfyUI input dir with a uuid
+    # name so concurrent jobs can't collide, and cleaned up after.
+    bg_filename: str | None = None
+    if background_image is not None and background_image.filename:
+        bg_ext = (background_image.filename or "").lower().rsplit(".", 1)[-1] or "png"
+        if bg_ext not in ("png", "jpg", "jpeg", "webp"):
+            bg_ext = "png"
+        bg_filename = f"motion_bg_{uuid.uuid4().hex}.{bg_ext}"
+        bg_path = str(INPUT_DIR / bg_filename)
+        Path(bg_path).write_bytes(await background_image.read())
+        cleanup_paths.append(bg_path)
+
     workflow = build_wan_motion_workflow(
         reference_video_filename=ref_video_filename,
         character_image_filename=img_filename,
@@ -517,6 +532,8 @@ async def motion(
         relight=relight,
         lightning_steps=lightning_steps,
         sampler_shift=sampler_shift,
+        use_sam2_mask=use_sam2_mask,
+        background_image_filename=bg_filename,
     )
 
     # Pull the auto-sized swap + tile values out for the response so
@@ -540,6 +557,8 @@ async def motion(
             "vae_tiling": chosen_tile_vae,
             "megapixel_frames": round(width * height * (2 * length) / 1_000_000, 1),
         },
+        "sam2_mask": use_sam2_mask or bool(bg_filename),
+        "background_swap": bool(bg_filename),
     }
 
 

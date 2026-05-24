@@ -49,6 +49,7 @@ _WAN_MODEL = "Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors"
 _WAN_VAE = "Wan2_1_VAE_fp32.safetensors"
 _WAN_TEXT_ENCODER = "umt5-xxl-enc-fp8_e4m3fn.safetensors"
 _WAN_CLIP_VISION = "clip_vision_h.safetensors"
+_SAM2_MODEL = "sam2.1_hiera_base_plus.safetensors"
 _WAN_RELIGHT_LORA = "WanAnimate_relight_lora_fp16.safetensors"
 _WAN_LIGHTNING_LORA = "Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors"
 # Quality-enhancement LoRAs from the AIGCTV stack — stacked at 1.0
@@ -139,6 +140,8 @@ def build_wan_motion_workflow(
     relight: bool = True,
     lightning_steps: int = _WAN_STEPS,
     sampler_shift: float = _WAN_SHIFT,
+    use_sam2_mask: bool = False,
+    background_image_filename: str | None = None,
 ) -> dict:
     """Build the AIGCTV-style Wan 2.2 Animate API workflow.
 
@@ -156,6 +159,21 @@ def build_wan_motion_workflow(
       lightning_steps           sampler steps (4 = Lightning default)
       sampler_shift             noise-schedule shift (5 = Lightning default)
 
+      use_sam2_mask             enable SAM2 character segmentation. Adds
+                                a SAM2 → mask-grow → blockify chain that
+                                feeds into WanVideoAnimateEmbeds. Without
+                                a background image, the ref video itself
+                                (with character pixels blacked out) is the
+                                background — i.e. cleaner character
+                                regeneration over the SAME scene.
+
+      background_image_filename optional uploaded image used as the new
+                                scene. Implies use_sam2_mask=True. The
+                                image is resized to the canvas and
+                                repeated across all (2 × length) frames
+                                so the character moves over a static
+                                replacement background.
+
     Returns a Comfy API-format dict ready for POST /prompt.
 
     Length math: the workflow PREPENDS `length` warm-up frames (copies of
@@ -163,6 +181,10 @@ def build_wan_motion_workflow(
     length frames, then keeps only the second half. So the user-visible
     output is `length` frames.
     """
+    # background_image implies SAM2 (we need the mask to know where to
+    # composite the character on the new background)
+    if background_image_filename:
+        use_sam2_mask = True
     # Snap inputs to model constraints
     length = max(4, length - (length % 4))
     width = (width // 16) * 16
@@ -374,6 +396,12 @@ def build_wan_motion_workflow(
         # face crops, returns an image-conditioning bundle that feeds
         # the sampler. num_frames + frame_window_size both = 2 * length
         # because we're sampling the prepended warm-up too.
+        #
+        # SAM2 path (use_sam2_mask=True): node 170 gains `bg_images` +
+        # `mask` inputs wired up by the section below. Without SAM2 we
+        # let Wan re-generate the entire scene; with SAM2 the model
+        # is told "regenerate ONLY where the mask says character is,
+        # composite over bg_images otherwise."
         "170": {"class_type": "WanVideoAnimateEmbeds", "inputs": {
             "width": width,
             "height": height,
@@ -389,6 +417,7 @@ def build_wan_motion_workflow(
             "ref_images": ["141", 0],
             "pose_images": ["162", 0],   # DrawViTPose IMAGE output
             "face_images": ["161", 1],   # PoseAndFaceDetection face crops
+            # bg_images + mask injected below when use_sam2_mask=True.
         }},
 
         # ─── 9. Context options (sliding-window sampling) ──────────
@@ -469,5 +498,103 @@ def build_wan_motion_workflow(
             "no_preview": False,
         }},
     }
+
+    # ─── SAM2 background-swap chain (optional) ────────────────────
+    # Wired up after the base graph is built so the conditional logic
+    # stays out of the (already long) dict literal. Two paths:
+    #   (a) use_sam2_mask=True, no background_image  → bg = ref video
+    #       with the character region blacked out. Cleaner character
+    #       regeneration against the SAME scene.
+    #   (b) use_sam2_mask=True, background_image=…   → bg = the upload,
+    #       resized + repeated across all 2 × length frames. Character
+    #       gets composited onto a NEW scene.
+    if use_sam2_mask:
+        workflow.update({
+            # 8 GB-ish SAM2 model load. segmentor="video" reuses one
+            # forward pass per batch, much faster than per-frame for
+            # multi-frame inputs. precision=fp16 is the documented
+            # AIGCTV default.
+            "300": {"class_type": "DownloadAndLoadSAM2Model", "inputs": {
+                "model": _SAM2_MODEL,
+                "segmentor": "video",
+                "device": "cuda",
+                "precision": "fp16",
+            }},
+            # Segment the character across all 2 × length frames. The
+            # bboxes input is PoseAndFaceDetection's person-bbox output
+            # (slot 3) — using the existing pose detection saves us a
+            # second YOLO pass and guarantees the SAM2 prompt aligns
+            # with whatever frames the pose extractor labelled.
+            "301": {"class_type": "Sam2Segmentation", "inputs": {
+                "sam2_model": ["300", 0],
+                "image": ["153", 0],     # 2 × length ref-video batch
+                "keep_model_loaded": False,
+                "bboxes": ["161", 3],    # PoseAndFaceDetection person bboxes
+                "individual_objects": False,
+            }},
+            # Grow + soft-edge the mask a little so the character
+            # boundary doesn't reveal a hard seam after compositing.
+            "302": {"class_type": "GrowMaskWithBlur", "inputs": {
+                "mask": ["301", 0],
+                "expand": 25,
+                "incremental_expandrate": 0,
+                "tapered_corners": True,
+                "flip_input": False,
+                "blur_radius": 0,
+                "lerp_alpha": 1,
+                "decay_factor": 1,
+                "fill_holes": False,
+            }},
+            # Quantize the (smoothed) mask to 32-px blocks — matches
+            # Wan's patch-embedding stride so the inpainting boundary
+            # lands on tokens the model can actually represent. Without
+            # this the mask edge tends to bleed.
+            "303": {"class_type": "BlockifyMask", "inputs": {
+                "masks": ["302", 0],
+                "block_size": 32,
+                "device": "cpu",
+            }},
+        })
+
+        if background_image_filename:
+            # Background-swap path: load + resize the supplied
+            # background, repeat across all 2 × length frames, feed
+            # straight to WanVideoAnimateEmbeds. No DrawMaskOnImage
+            # here because we WANT the full background — Wan uses the
+            # mask to know where to inpaint character.
+            workflow["310"] = {"class_type": "LoadImage", "inputs": {
+                "image": background_image_filename,
+            }}
+            workflow["311"] = {"class_type": "ImageResizeKJv2", "inputs": {
+                "width": width,
+                "height": height,
+                "upscale_method": "lanczos",
+                "keep_proportion": "crop",
+                "pad_color": "0, 0, 0",
+                "crop_position": "center",
+                "divisible_by": 8,
+                "device": "cpu",
+                "image": ["310", 0],
+            }}
+            workflow["312"] = {"class_type": "RepeatImageBatch", "inputs": {
+                "amount": 2 * length,
+                "image": ["311", 0],
+            }}
+            bg_source = ["312", 0]
+        else:
+            # No new background — use the ref video with the character
+            # region blacked out (DrawMaskOnImage). Wan re-generates a
+            # clean character over the original scene.
+            workflow["310"] = {"class_type": "DrawMaskOnImage", "inputs": {
+                "image": ["153", 0],     # 2 × length ref-video batch
+                "mask": ["303", 0],      # blockified mask
+                "color": "0, 0, 0",
+                "device": "cpu",
+            }}
+            bg_source = ["310", 0]
+
+        # Wire bg_images + mask into WanVideoAnimateEmbeds.
+        workflow["170"]["inputs"]["bg_images"] = bg_source
+        workflow["170"]["inputs"]["mask"] = ["303", 0]
 
     return workflow
