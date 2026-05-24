@@ -282,6 +282,14 @@ async def healthz():
     return {"status": "ok", "service": "motion-control-api", "version": app.version}
 
 
+# /health alias so the API Explorer's "System → Health Check" tile
+# (which calls GET /health, ai-gen-api-v2 convention) works against
+# the motion-control pod without a per-endpoint URL override.
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "motion-control-api", "version": app.version}
+
+
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
     if job_id not in jobs:
@@ -297,6 +305,44 @@ async def get_all_jobs():
                     for s in ("queued", "processing", "completed", "failed")},
         "jobs": [{"job_id": jid, **info} for jid, info in jobs.items()],
     }
+
+
+@app.get("/queue")
+async def get_queue():
+    """Active queue — anything queued or processing. Mirrors
+    ai-gen-api-v2's surface so the API Explorer's "Active Queue"
+    tile works against this pod too."""
+    active = {jid: info for jid, info in jobs.items()
+              if info.get("status") in ("queued", "processing")}
+    return {
+        "count": len(active),
+        "jobs": [{"job_id": jid, "status": info.get("status")} for jid, info in active.items()],
+    }
+
+
+@app.get("/videos")
+async def list_videos():
+    """List output videos on disk. motion-control-api writes flat
+    into ComfyUI's output dir (no video/ + images/ split), so we
+    glob OUTPUT_DIR directly for *.mp4 and attach the matching
+    `<stem>_thumb.jpg` if present."""
+    if not OUTPUT_DIR.exists():
+        return {"total": 0, "videos": []}
+    videos = []
+    for f in sorted(OUTPUT_DIR.glob("*.mp4"),
+                    key=lambda x: x.stat().st_mtime, reverse=True):
+        stat = f.stat()
+        entry = {
+            "filename": f.name,
+            "size_mb": round(stat.st_size / 1024 / 1024, 2),
+            "url": f"{BASE_URL}/video/{f.name}",
+            "created_at": stat.st_mtime,
+        }
+        thumb = OUTPUT_DIR / f"{f.stem}_thumb.jpg"
+        if thumb.exists():
+            entry["thumbnail_url"] = f"{BASE_URL}/image/{thumb.name}"
+        videos.append(entry)
+    return {"total": len(videos), "videos": videos}
 
 
 @app.delete("/jobs/{job_id}/cancel")
