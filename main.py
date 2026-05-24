@@ -309,15 +309,44 @@ async def get_all_jobs():
 
 @app.get("/queue")
 async def get_queue():
-    """Active queue — anything queued or processing. Mirrors
-    ai-gen-api-v2's surface so the API Explorer's "Active Queue"
-    tile works against this pod too."""
-    active = {jid: info for jid, info in jobs.items()
+    """Active queue — anything our API thinks is queued/processing,
+    PLUS anything ComfyUI itself is currently running or has pending.
+    The ComfyUI-side merge is the recovery path: when uvicorn restarts
+    (any code deploy), the in-memory `jobs` dict is wiped, but the
+    workflow ComfyUI is sampling keeps running and stays visible here.
+    Those orphaned jobs show with `source: "comfyui"` and the ComfyUI
+    prompt_id as the job_id — they won't appear in /jobs or
+    /status/{id} (those still need our API to know about the job)."""
+    active = {jid: {"job_id": jid, "status": info.get("status"), "source": "api"}
+              for jid, info in jobs.items()
               if info.get("status") in ("queued", "processing")}
-    return {
-        "count": len(active),
-        "jobs": [{"job_id": jid, "status": info.get("status")} for jid, info in active.items()],
-    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{COMFYUI_URL}/queue")
+            if r.status_code == 200:
+                comfy_q = r.json()
+                # queue_running entries look like: [priority, prompt_id, prompt, extra, outputs]
+                for entry in comfy_q.get("queue_running", []) or []:
+                    pid = entry[1] if len(entry) > 1 else None
+                    if pid and pid not in active:
+                        active[pid] = {"job_id": pid, "status": "processing",
+                                       "source": "comfyui"}
+                for entry in comfy_q.get("queue_pending", []) or []:
+                    pid = entry[1] if len(entry) > 1 else None
+                    if pid and pid not in active:
+                        active[pid] = {"job_id": pid, "status": "queued",
+                                       "source": "comfyui"}
+    except Exception as e:
+        # Don't fail the whole call if ComfyUI is unreachable —
+        # the API's own jobs dict is still useful.
+        return {
+            "count": len(active),
+            "jobs": list(active.values()),
+            "comfyui_unreachable": str(e),
+        }
+
+    return {"count": len(active), "jobs": list(active.values())}
 
 
 @app.get("/videos")
